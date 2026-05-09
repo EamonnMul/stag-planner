@@ -6,6 +6,7 @@ import { AuthGate } from "@/components/AuthGate";
 import { TopBar } from "@/components/TopBar";
 import { useAuth } from "@/lib/auth";
 import { createEvent } from "@/lib/firestore/events";
+import type { Visibility } from "@/lib/types";
 
 export default function NewEventPage() {
   return (
@@ -23,6 +24,7 @@ function Inner() {
   const [location, setLocation] = useState("");
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
+  const [visibility, setVisibility] = useState<Visibility>("private");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -44,9 +46,11 @@ function Inner() {
         location: location.trim(),
         startDate,
         endDate,
+        visibility,
         organiserId: user.uid,
         organiserName: profile.name,
         organiserEmail: profile.email,
+        organiserAvatarUrl: profile.avatarUrl ?? null,
       });
       router.push(`/events/${id}`);
     } catch (err) {
@@ -69,8 +73,8 @@ function Inner() {
             <input className="input" required value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Dave's stag" />
           </div>
           <div>
-            <label className="label">Location</label>
-            <input className="input" required value={location} onChange={(e) => setLocation(e.target.value)} placeholder="Lisbon" />
+            <label className="label">Default location / region</label>
+            <input className="input" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="Europe — destinations TBD" />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -86,6 +90,25 @@ function Inner() {
             <label className="label">Description</label>
             <textarea className="input min-h-[80px]" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Long weekend, mixed budget, no embarrassing T-shirts." />
           </div>
+
+          <div>
+            <label className="label">Visibility</label>
+            <div className="grid grid-cols-2 gap-2">
+              <Choice
+                active={visibility === "private"}
+                onClick={() => setVisibility("private")}
+                title="Private"
+                body="Only invited members can view."
+              />
+              <Choice
+                active={visibility === "public"}
+                onClick={() => setVisibility("public")}
+                title="Public"
+                body="Anyone with the link can view (read-only)."
+              />
+            </div>
+          </div>
+
           {error && <p className="text-sm text-red-600">{error}</p>}
           <div className="flex gap-2">
             <button type="button" className="btn-secondary flex-1" onClick={() => router.back()}>Cancel</button>
@@ -94,5 +117,30 @@ function Inner() {
         </form>
       </main>
     </>
+  );
+}
+
+function Choice({
+  active,
+  onClick,
+  title,
+  body,
+}: {
+  active: boolean;
+  onClick: () => void;
+  title: string;
+  body: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`text-left rounded-xl border p-3 transition ${
+        active ? "bg-brand-50 border-brand-300" : "bg-white border-gray-200 hover:border-gray-300"
+      }`}
+    >
+      <div className="font-semibold text-sm">{title}</div>
+      <div className="text-xs text-gray-600">{body}</div>
+    </button>
   );
 }

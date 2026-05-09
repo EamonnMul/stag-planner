@@ -58,11 +58,18 @@ function Inner() {
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <div className="font-semibold truncate">{ev.title}</div>
-                        <div className="text-sm text-gray-600 truncate">{ev.location}</div>
+                        <div className="text-sm text-gray-600 truncate">{ev.location || "Destination TBD"}</div>
                       </div>
-                      {ev.organiserId === user?.uid && (
-                        <span className="pill bg-brand-50 text-brand-700">Organiser</span>
-                      )}
+                      <div className="flex flex-col items-end gap-1 shrink-0">
+                        {ev.organiserId === user?.uid && (
+                          <span className="pill bg-brand-50 text-brand-700">Organiser</span>
+                        )}
+                        <span className={`pill text-[10px] uppercase tracking-wide ${
+                          ev.visibility === "public" ? "bg-amber-50 text-amber-700" : "bg-gray-100 text-gray-600"
+                        }`}>
+                          {ev.visibility}
+                        </span>
+                      </div>
                     </div>
                     <div className="mt-3 text-sm text-gray-600">
                       {formatDateRange(ev.startDate, ev.endDate)}

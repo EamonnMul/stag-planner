@@ -7,24 +7,22 @@ import { Spinner } from "@/components/ui/Spinner";
 import { useAuth } from "@/lib/auth";
 import {
   inviteMemberByEmail,
-  listMembers,
   removeMember,
+  subscribeMembers,
 } from "@/lib/firestore/events";
 import { formatRelative } from "@/lib/format";
 import type { Member } from "@/lib/types";
-import { useEvent, useIsOrganiser } from "../event-context";
+import { useEvent } from "../event-context";
 
 export default function MembersPage() {
-  const { event, refresh: refreshEvent } = useEvent();
+  const { event, isOrganiser } = useEvent();
   const { user, profile } = useAuth();
-  const isOrganiser = useIsOrganiser();
   const [members, setMembers] = useState<Member[] | null>(null);
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
-  const refresh = async () => setMembers(await listMembers(event.id));
-  useEffect(() => { refresh(); }, [event.id]);
+  useEffect(() => subscribeMembers(event.id, setMembers), [event.id]);
 
   const onInvite = async (e: FormEvent) => {
     e.preventDefault();
@@ -36,7 +34,6 @@ export default function MembersPage() {
       if (res.added) {
         setMessage({ kind: "ok", text: `Added ${email}.` });
         setEmail("");
-        await Promise.all([refresh(), refreshEvent()]);
       } else {
         setMessage({ kind: "err", text: res.reason ?? "Could not add member." });
       }
@@ -76,6 +73,14 @@ export default function MembersPage() {
         </form>
       )}
 
+      {event.visibility === "public" && (
+        <div className="card bg-amber-50 border-amber-200">
+          <div className="text-sm text-amber-900">
+            <strong>Public event.</strong> Anyone with the link can view, but only members can vote and contribute.
+          </div>
+        </div>
+      )}
+
       {members === null ? (
         <Spinner />
       ) : members.length === 0 ? (
@@ -105,7 +110,6 @@ export default function MembersPage() {
                     onClick={async () => {
                       if (confirm(`Remove ${m.name} from the stag?`)) {
                         await removeMember(event.id, m.id, m.userId);
-                        await Promise.all([refresh(), refreshEvent()]);
                       }
                     }}
                     className="text-xs text-gray-400 hover:text-red-600"

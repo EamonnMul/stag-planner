@@ -1,9 +1,9 @@
 import { Timestamp } from "firebase/firestore";
 
 export type Role = "organiser" | "member";
+export type Visibility = "public" | "private";
 
 export type IdeaCategory =
-  | "destinations"
   | "activities"
   | "accommodation"
   | "nightlife"
@@ -13,6 +13,7 @@ export type IdeaCategory =
 
 export type TaskStatus = "todo" | "in_progress" | "done";
 export type TaskPriority = "low" | "medium" | "high";
+export type ProConType = "pro" | "con";
 
 export interface UserProfile {
   uid: string;
@@ -30,13 +31,14 @@ export interface StagEvent {
   startDate: Timestamp;
   endDate: Timestamp;
   organiserId: string;
+  organiserName: string;
   memberIds: string[];
+  visibility: Visibility;
   createdAt: Timestamp;
 }
 
 export interface Member {
   id: string;
-  eventId: string;
   userId: string;
   name: string;
   email: string;
@@ -45,9 +47,24 @@ export interface Member {
   joinedAt: Timestamp;
 }
 
+export interface Destination {
+  id: string;
+  name: string;
+  country: string;
+  city: string;
+  description: string;
+  estimatedCost: number;
+  travelNotes: string;
+  nightlifeRating: number; // 1–5
+  activityRating: number;  // 1–5
+  createdBy: string;
+  createdByName: string;
+  createdAt: Timestamp;
+  voteCount: number;
+}
+
 export interface Idea {
   id: string;
-  eventId: string;
   title: string;
   description: string;
   category: IdeaCategory;
@@ -55,33 +72,11 @@ export interface Idea {
   createdBy: string;
   createdByName: string;
   createdAt: Timestamp;
-  upvotes: number;
-  downvotes: number;
-  score: number;
-}
-
-export interface Vote {
-  id: string;
-  ideaId: string;
-  eventId: string;
-  userId: string;
-  value: 1 | -1;
-  createdAt: Timestamp;
-}
-
-export interface Comment {
-  id: string;
-  ideaId: string;
-  eventId: string;
-  userId: string;
-  userName: string;
-  text: string;
-  createdAt: Timestamp;
+  voteCount: number;
 }
 
 export interface Task {
   id: string;
-  eventId: string;
   title: string;
   description: string;
   status: TaskStatus;
@@ -94,18 +89,45 @@ export interface Task {
   createdAt: Timestamp;
 }
 
+export interface Vote {
+  id: string;            // doc id = userId
+  userId: string;
+  userName: string;
+  value: 1;
+  createdAt: Timestamp;
+}
+
+export interface Comment {
+  id: string;
+  text: string;
+  userId: string;
+  userName: string;
+  createdAt: Timestamp;
+}
+
+export interface ProConItem {
+  id: string;
+  text: string;
+  type: ProConType;
+  userId: string;
+  userName: string;
+  createdAt: Timestamp;
+}
+
 export type ActivityType =
   | "event_created"
   | "member_joined"
+  | "destination_created"
   | "idea_created"
-  | "idea_voted"
+  | "vote_cast"
+  | "vote_removed"
   | "comment_added"
+  | "pro_con_added"
   | "task_created"
   | "task_status_changed";
 
 export interface ActivityLogEntry {
   id: string;
-  eventId: string;
   type: ActivityType;
   message: string;
   userId: string;
@@ -114,7 +136,6 @@ export interface ActivityLogEntry {
 }
 
 export const IDEA_CATEGORIES: { value: IdeaCategory; label: string }[] = [
-  { value: "destinations", label: "Destinations" },
   { value: "activities", label: "Activities" },
   { value: "accommodation", label: "Accommodation" },
   { value: "nightlife", label: "Nightlife" },

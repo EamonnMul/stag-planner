@@ -1,5 +1,15 @@
-import { addDoc, collection, getDocs, limit, orderBy, query, serverTimestamp, where } from "firebase/firestore";
+import {
+  addDoc,
+  collection,
+  limit,
+  onSnapshot,
+  orderBy,
+  query,
+  serverTimestamp,
+  Unsubscribe,
+} from "firebase/firestore";
 import { db } from "../firebase";
+import { activityPath } from "./paths";
 import type { ActivityLogEntry, ActivityType } from "../types";
 
 export async function logActivity(entry: {
@@ -9,19 +19,24 @@ export async function logActivity(entry: {
   userId: string;
   userName: string;
 }) {
-  await addDoc(collection(db, "activityLog"), {
-    ...entry,
+  const { eventId, ...rest } = entry;
+  await addDoc(collection(db, activityPath(eventId)), {
+    ...rest,
     createdAt: serverTimestamp(),
   });
 }
 
-export async function listRecentActivity(eventId: string, max = 10): Promise<ActivityLogEntry[]> {
+export function subscribeActivity(
+  eventId: string,
+  max: number,
+  cb: (entries: ActivityLogEntry[]) => void
+): Unsubscribe {
   const q = query(
-    collection(db, "activityLog"),
-    where("eventId", "==", eventId),
+    collection(db, activityPath(eventId)),
     orderBy("createdAt", "desc"),
     limit(max)
   );
-  const snap = await getDocs(q);
-  return snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<ActivityLogEntry, "id">) }));
+  return onSnapshot(q, (snap) => {
+    cb(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<ActivityLogEntry, "id">) })));
+  });
 }

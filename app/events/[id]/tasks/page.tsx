@@ -9,7 +9,7 @@ import { listMembers } from "@/lib/firestore/events";
 import {
   createTask,
   deleteTask,
-  listTasks,
+  subscribeTasks,
   updateTaskStatus,
 } from "@/lib/firestore/tasks";
 import { formatDate } from "@/lib/format";
@@ -30,7 +30,7 @@ type Filters = {
 };
 
 export default function TasksPage() {
-  const { event } = useEvent();
+  const { event, canWrite, isOrganiser } = useEvent();
   const { user, profile } = useAuth();
   const [tasks, setTasks] = useState<Task[] | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
@@ -41,11 +41,9 @@ export default function TasksPage() {
     priority: "all",
   });
 
-  const refresh = async () => setTasks(await listTasks(event.id));
-
+  useEffect(() => subscribeTasks(event.id, setTasks), [event.id]);
   useEffect(() => {
-    refresh();
-    listMembers(event.id).then(setMembers);
+    listMembers(event.id).then(setMembers).catch(() => setMembers([]));
   }, [event.id]);
 
   const filtered = useMemo(() => {
@@ -64,24 +62,25 @@ export default function TasksPage() {
   const pct = total === 0 ? 0 : Math.round((done / total) * 100);
 
   const cycleStatus = async (t: Task) => {
-    if (!user || !profile) return;
+    if (!canWrite || !user || !profile) return;
     const next: TaskStatus = t.status === "todo" ? "in_progress" : t.status === "in_progress" ? "done" : "todo";
-    setTasks((arr) => (arr ?? []).map((x) => (x.id === t.id ? { ...x, status: next } : x)));
     try {
-      await updateTaskStatus(t.id, next, { id: user.uid, name: profile.name });
-    } catch {
-      refresh();
+      await updateTaskStatus(event.id, t.id, next, { id: user.uid, name: profile.name });
+    } catch (err) {
+      console.error(err);
     }
   };
 
   const canEditTask = (t: Task) =>
-    user?.uid === event.organiserId || user?.uid === t.assigneeId || user?.uid === t.createdBy;
+    canWrite && (isOrganiser || user?.uid === t.assigneeId || user?.uid === t.createdBy);
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2">
         <h1 className="text-2xl font-bold">Tasks</h1>
-        <button className="btn-primary" onClick={() => setShowNew(true)}>+ New task</button>
+        {canWrite && (
+          <button className="btn-primary" onClick={() => setShowNew(true)}>+ New task</button>
+        )}
       </div>
 
       <div className="card">
@@ -116,8 +115,8 @@ export default function TasksPage() {
         total === 0 ? (
           <Empty
             title="No tasks yet"
-            body="Add the first one — booking, deposit, transport, etc."
-            action={<button className="btn-primary" onClick={() => setShowNew(true)}>Add a task</button>}
+            body={canWrite ? "Add the first one — booking, deposit, transport, etc." : "Members haven't added any tasks yet."}
+            action={canWrite ? <button className="btn-primary" onClick={() => setShowNew(true)}>Add a task</button> : undefined}
           />
         ) : (
           <Empty title="Nothing matches" body="Try clearing some filters." />
@@ -128,14 +127,15 @@ export default function TasksPage() {
             <li key={t.id} className="card flex gap-3 items-start">
               <button
                 onClick={() => cycleStatus(t)}
-                className={`mt-0.5 h-6 w-6 shrink-0 rounded-full border-2 flex items-center justify-center text-xs ${
+                disabled={!canWrite}
+                className={`mt-0.5 h-6 w-6 shrink-0 rounded-full border-2 flex items-center justify-center text-xs disabled:cursor-not-allowed ${
                   t.status === "done"
                     ? "bg-green-500 border-green-500 text-white"
                     : t.status === "in_progress"
                     ? "border-brand-500 text-brand-500"
                     : "border-gray-300 text-transparent"
                 }`}
-                title="Click to change status"
+                title={canWrite ? "Click to change status" : "Sign in as a member to update"}
               >
                 {t.status === "done" ? "✓" : t.status === "in_progress" ? "…" : ""}
               </button>
@@ -154,10 +154,7 @@ export default function TasksPage() {
               {canEditTask(t) && (
                 <button
                   onClick={async () => {
-                    if (confirm("Delete this task?")) {
-                      await deleteTask(t.id);
-                      refresh();
-                    }
+                    if (confirm("Delete this task?")) await deleteTask(event.id, t.id);
                   }}
                   className="text-xs text-gray-400 hover:text-red-600"
                 >
@@ -169,29 +166,22 @@ export default function TasksPage() {
         </ul>
       )}
 
-      <NewTaskModal
-        open={showNew}
-        onClose={() => setShowNew(false)}
-        members={members}
-        onCreated={async () => {
-          setShowNew(false);
-          await refresh();
-        }}
-      />
+      {showNew && (
+        <NewTaskModal
+          members={members}
+          onClose={() => setShowNew(false)}
+        />
+      )}
     </div>
   );
 }
 
 function NewTaskModal({
-  open,
-  onClose,
   members,
-  onCreated,
+  onClose,
 }: {
-  open: boolean;
-  onClose: () => void;
   members: Member[];
-  onCreated: () => Promise<void>;
+  onClose: () => void;
 }) {
   const { event } = useEvent();
   const { user, profile } = useAuth();
@@ -210,8 +200,8 @@ function NewTaskModal({
       const assignee = members.find((m) => m.userId === assigneeId);
       await createTask({
         eventId: event.id,
-        title: title.trim(),
-        description: description.trim(),
+        title,
+        description,
         priority,
         dueDate: dueDate ? new Date(dueDate) : null,
         assigneeId: assignee?.userId ?? null,
@@ -219,15 +209,14 @@ function NewTaskModal({
         createdBy: user.uid,
         createdByName: profile.name,
       });
-      setTitle(""); setDescription(""); setPriority("medium"); setDueDate(""); setAssigneeId("");
-      await onCreated();
+      onClose();
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <Modal open={open} onClose={onClose} title="New task">
+    <Modal open onClose={onClose} title="New task">
       <form onSubmit={submit} className="space-y-3">
         <div>
           <label className="label">Title</label>

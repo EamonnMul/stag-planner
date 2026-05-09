@@ -1,87 +1,43 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
+import { CommentsSection } from "@/components/CommentsSection";
+import { ProsConsSection } from "@/components/ProsConsSection";
+import { VoteButton } from "@/components/VoteButton";
 import { Empty } from "@/components/ui/Empty";
 import { Modal } from "@/components/ui/Modal";
 import { Spinner } from "@/components/ui/Spinner";
 import { useAuth } from "@/lib/auth";
-import {
-  addComment,
-  castVote,
-  createIdea,
-  deleteIdea,
-  listComments,
-  listIdeas,
-  listVotesForUser,
-} from "@/lib/firestore/ideas";
-import { formatCurrency, formatRelative } from "@/lib/format";
-import {
-  IDEA_CATEGORIES,
-  type Comment,
-  type Idea,
-  type IdeaCategory,
-} from "@/lib/types";
+import { createIdea, deleteIdea, subscribeIdeas } from "@/lib/firestore/ideas";
+import { ideaPath } from "@/lib/firestore/paths";
+import { formatCurrency } from "@/lib/format";
+import { IDEA_CATEGORIES, type Idea, type IdeaCategory } from "@/lib/types";
 import { useEvent } from "../event-context";
 
 export default function IdeasPage() {
-  const { event } = useEvent();
-  const { user, profile } = useAuth();
+  const { event, canWrite, isOrganiser } = useEvent();
+  const { user } = useAuth();
   const [ideas, setIdeas] = useState<Idea[] | null>(null);
-  const [myVotes, setMyVotes] = useState<Record<string, 1 | -1>>({});
   const [filter, setFilter] = useState<IdeaCategory | "all">("all");
   const [showNew, setShowNew] = useState(false);
   const [openIdea, setOpenIdea] = useState<Idea | null>(null);
 
-  const refresh = async () => {
-    if (!user) return;
-    const [list, votes] = await Promise.all([
-      listIdeas(event.id),
-      listVotesForUser(event.id, user.uid),
-    ]);
-    setIdeas(list);
-    setMyVotes(votes);
-  };
-
-  useEffect(() => {
-    refresh();
-  }, [event.id, user?.uid]);
+  useEffect(() => subscribeIdeas(event.id, setIdeas), [event.id]);
 
   const visible = (ideas ?? []).filter((i) => filter === "all" || i.category === filter);
-
-  const handleVote = async (idea: Idea, value: 1 | -1) => {
-    if (!user || !profile) return;
-    setMyVotes((m) => ({ ...m, [idea.id]: value }));
-    setIdeas((arr) =>
-      (arr ?? []).map((i) => {
-        if (i.id !== idea.id) return i;
-        const prev = myVotes[idea.id] ?? 0;
-        let up = i.upvotes;
-        let down = i.downvotes;
-        if (prev === 1) up--;
-        if (prev === -1) down--;
-        if (value === 1) up++;
-        if (value === -1) down++;
-        return { ...i, upvotes: up, downvotes: down, score: up - down };
-      })
-    );
-    try {
-      await castVote({
-        ideaId: idea.id,
-        eventId: event.id,
-        userId: user.uid,
-        userName: profile.name,
-        value,
-      });
-    } catch {
-      refresh();
-    }
-  };
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2">
-        <h1 className="text-2xl font-bold">Ideas</h1>
-        <button className="btn-primary" onClick={() => setShowNew(true)}>+ Pitch idea</button>
+        <div>
+          <h1 className="text-2xl font-bold">Ideas</h1>
+          <p className="text-sm text-gray-600">
+            Activities, places, plans — anything that's not a destination.
+          </p>
+        </div>
+        {canWrite && (
+          <button className="btn-primary" onClick={() => setShowNew(true)}>+ Pitch</button>
+        )}
       </div>
 
       <div className="flex gap-2 overflow-x-auto pb-2 -mx-1 px-1">
@@ -101,44 +57,56 @@ export default function IdeasPage() {
       ) : visible.length === 0 ? (
         <Empty
           title="No ideas yet"
-          body="Pitch the first one to get the ball rolling."
-          action={<button className="btn-primary" onClick={() => setShowNew(true)}>Pitch an idea</button>}
+          body={canWrite ? "Pitch the first one." : "Members haven't pitched any ideas yet."}
+          action={canWrite ? <button className="btn-primary" onClick={() => setShowNew(true)}>Pitch an idea</button> : undefined}
         />
       ) : (
         <ul className="space-y-3">
           {visible.map((idea) => (
-            <IdeaCard
-              key={idea.id}
-              idea={idea}
-              myVote={myVotes[idea.id] ?? 0}
-              onVote={handleVote}
-              onOpen={() => setOpenIdea(idea)}
-              onDelete={
-                user?.uid === idea.createdBy || user?.uid === event.organiserId
-                  ? async () => {
-                      await deleteIdea(idea.id);
-                      refresh();
-                    }
-                  : undefined
-              }
-            />
+            <li key={idea.id} className="card">
+              <div className="flex gap-3 items-start">
+                <div className="min-w-0 flex-1">
+                  <button onClick={() => setOpenIdea(idea)} className="text-left min-w-0">
+                    <div className="font-semibold">{idea.title}</div>
+                    <div className="text-xs text-gray-500 uppercase tracking-wide mt-0.5">
+                      {labelFor(idea.category)} · {formatCurrency(idea.estimatedCost)} · {idea.createdByName}
+                    </div>
+                  </button>
+                  {idea.description && (
+                    <p className="text-sm text-gray-700 mt-2 line-clamp-2">{idea.description}</p>
+                  )}
+                  <button onClick={() => setOpenIdea(idea)} className="text-sm text-brand-700 hover:underline mt-2">
+                    Open →
+                  </button>
+                </div>
+                <VoteButton
+                  itemPath={ideaPath(event.id, idea.id)}
+                  voteCount={idea.voteCount}
+                  canVote={canWrite}
+                  size="sm"
+                />
+              </div>
+            </li>
           ))}
         </ul>
       )}
 
-      <NewIdeaModal
-        open={showNew}
-        onClose={() => setShowNew(false)}
-        onCreated={async () => {
-          setShowNew(false);
-          await refresh();
-        }}
-      />
+      {showNew && (
+        <NewIdeaModal
+          onClose={() => setShowNew(false)}
+        />
+      )}
 
       {openIdea && (
         <IdeaDetailModal
           idea={openIdea}
+          canWrite={canWrite}
+          canDelete={user?.uid === openIdea.createdBy || isOrganiser}
           onClose={() => setOpenIdea(null)}
+          onDelete={async () => {
+            await deleteIdea(event.id, openIdea.id);
+            setOpenIdea(null);
+          }}
         />
       )}
     </div>
@@ -160,75 +128,7 @@ function FilterChip({ active, onClick, label }: { active: boolean; onClick: () =
   );
 }
 
-function IdeaCard({
-  idea,
-  myVote,
-  onVote,
-  onOpen,
-  onDelete,
-}: {
-  idea: Idea;
-  myVote: 1 | -1 | 0;
-  onVote: (idea: Idea, value: 1 | -1) => void;
-  onOpen: () => void;
-  onDelete?: () => Promise<void>;
-}) {
-  const cat = IDEA_CATEGORIES.find((c) => c.value === idea.category);
-  return (
-    <li className="card">
-      <div className="flex gap-3">
-        <div className="flex flex-col items-center gap-1 w-10 shrink-0">
-          <button
-            onClick={() => onVote(idea, 1)}
-            className={`w-10 h-10 rounded-full text-base font-bold flex items-center justify-center transition ${
-              myVote === 1 ? "bg-green-100 text-green-700" : "bg-gray-50 hover:bg-gray-100 text-gray-500"
-            }`}
-            aria-label="Upvote"
-          >▲</button>
-          <div className="text-sm font-semibold">{idea.score >= 0 ? `+${idea.score}` : idea.score}</div>
-          <button
-            onClick={() => onVote(idea, -1)}
-            className={`w-10 h-10 rounded-full text-base font-bold flex items-center justify-center transition ${
-              myVote === -1 ? "bg-red-100 text-red-700" : "bg-gray-50 hover:bg-gray-100 text-gray-500"
-            }`}
-            aria-label="Downvote"
-          >▼</button>
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-start justify-between gap-2">
-            <button onClick={onOpen} className="text-left min-w-0">
-              <div className="font-semibold truncate">{idea.title}</div>
-              <div className="text-xs text-gray-500 mt-0.5 uppercase tracking-wide">
-                {cat?.label} · {formatCurrency(idea.estimatedCost)} · {idea.createdByName}
-              </div>
-            </button>
-            {onDelete && (
-              <button onClick={onDelete} className="text-xs text-gray-400 hover:text-red-600">
-                Delete
-              </button>
-            )}
-          </div>
-          {idea.description && (
-            <p className="text-sm text-gray-700 mt-2 line-clamp-3">{idea.description}</p>
-          )}
-          <button onClick={onOpen} className="text-sm text-brand-700 hover:underline mt-2">
-            View comments →
-          </button>
-        </div>
-      </div>
-    </li>
-  );
-}
-
-function NewIdeaModal({
-  open,
-  onClose,
-  onCreated,
-}: {
-  open: boolean;
-  onClose: () => void;
-  onCreated: () => Promise<void>;
-}) {
+function NewIdeaModal({ onClose }: { onClose: () => void }) {
   const { event } = useEvent();
   const { user, profile } = useAuth();
   const [title, setTitle] = useState("");
@@ -237,34 +137,29 @@ function NewIdeaModal({
   const [cost, setCost] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const reset = () => {
-    setTitle(""); setDescription(""); setCategory("activities"); setCost("");
-  };
-
-  const onSubmit = async (e: FormEvent) => {
+  const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (!user || !profile) return;
     setBusy(true);
     try {
       await createIdea({
         eventId: event.id,
-        title: title.trim(),
-        description: description.trim(),
+        title,
+        description,
         category,
         estimatedCost: Number(cost) || 0,
         createdBy: user.uid,
         createdByName: profile.name,
       });
-      reset();
-      await onCreated();
+      onClose();
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <Modal open={open} onClose={onClose} title="Pitch an idea">
-      <form onSubmit={onSubmit} className="space-y-3">
+    <Modal open onClose={onClose} title="Pitch an idea">
+      <form onSubmit={submit} className="space-y-3">
         <div>
           <label className="label">Title</label>
           <input className="input" required value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Boat party" />
@@ -272,13 +167,11 @@ function NewIdeaModal({
         <div>
           <label className="label">Category</label>
           <select className="input" value={category} onChange={(e) => setCategory(e.target.value as IdeaCategory)}>
-            {IDEA_CATEGORIES.map((c) => (
-              <option key={c.value} value={c.value}>{c.label}</option>
-            ))}
+            {IDEA_CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
           </select>
         </div>
         <div>
-          <label className="label">Estimated cost per person</label>
+          <label className="label">Estimated cost p/p</label>
           <input type="number" min="0" className="input" value={cost} onChange={(e) => setCost(e.target.value)} placeholder="50" />
         </div>
         <div>
@@ -296,69 +189,55 @@ function NewIdeaModal({
   );
 }
 
-function IdeaDetailModal({ idea, onClose }: { idea: Idea; onClose: () => void }) {
-  const { user, profile } = useAuth();
+function IdeaDetailModal({
+  idea,
+  canWrite,
+  canDelete,
+  onClose,
+  onDelete,
+}: {
+  idea: Idea;
+  canWrite: boolean;
+  canDelete: boolean;
+  onClose: () => void;
+  onDelete: () => Promise<void>;
+}) {
   const { event } = useEvent();
-  const [comments, setComments] = useState<Comment[] | null>(null);
-  const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
+  const path = ideaPath(event.id, idea.id);
 
-  const refresh = async () => setComments(await listComments(idea.id));
-
-  useEffect(() => { refresh(); }, [idea.id]);
-
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!user || !profile || !text.trim()) return;
-    setBusy(true);
-    try {
-      await addComment({
-        eventId: event.id,
-        ideaId: idea.id,
-        userId: user.uid,
-        userName: profile.name,
-        text: text.trim(),
-      });
-      setText("");
-      await refresh();
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const cat = IDEA_CATEGORIES.find((c) => c.value === idea.category);
   return (
     <Modal open onClose={onClose} title={idea.title}>
-      <div className="text-xs text-gray-500 mb-3 uppercase tracking-wide">
-        {cat?.label} · {formatCurrency(idea.estimatedCost)} · {idea.createdByName}
+      <div className="text-xs text-gray-500 uppercase tracking-wide mb-3">
+        {labelFor(idea.category)} · {formatCurrency(idea.estimatedCost)} · {idea.createdByName}
       </div>
-      {idea.description && <p className="text-sm text-gray-700 whitespace-pre-wrap mb-4">{idea.description}</p>}
 
-      <h3 className="font-semibold text-sm mb-2">Comments</h3>
-      {comments === null ? (
-        <Spinner />
-      ) : comments.length === 0 ? (
-        <p className="text-sm text-gray-500">No comments yet.</p>
-      ) : (
-        <ul className="space-y-3 mb-4">
-          {comments.map((c) => (
-            <li key={c.id} className="text-sm">
-              <div className="font-medium">{c.userName} <span className="text-xs text-gray-400 font-normal ml-1">{formatRelative(c.createdAt)}</span></div>
-              <div className="text-gray-700 whitespace-pre-wrap">{c.text}</div>
-            </li>
-          ))}
-        </ul>
+      {idea.description && (
+        <p className="text-sm text-gray-700 whitespace-pre-wrap mb-5">{idea.description}</p>
       )}
 
-      <form onSubmit={submit} className="flex gap-2 pt-2 border-t">
-        <input
-          className="input"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="Add a comment…"
-        />
-        <button type="submit" className="btn-primary" disabled={busy || !text.trim()}>Post</button>
-      </form>
+      <div className="flex items-center justify-between gap-3 pb-5 mb-5 border-b">
+        <VoteButton itemPath={path} voteCount={idea.voteCount} canVote={canWrite} />
+        {canDelete && (
+          <button
+            onClick={async () => {
+              if (confirm(`Delete "${idea.title}"?`)) await onDelete();
+            }}
+            className="text-xs text-gray-400 hover:text-red-600"
+          >
+            Delete idea
+          </button>
+        )}
+      </div>
+
+      <div className="mb-5">
+        <ProsConsSection itemPath={path} canWrite={canWrite} />
+      </div>
+
+      <CommentsSection itemPath={path} canWrite={canWrite} />
     </Modal>
   );
+}
+
+function labelFor(c: IdeaCategory): string {
+  return IDEA_CATEGORIES.find((x) => x.value === c)?.label ?? c;
 }

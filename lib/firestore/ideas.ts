@@ -4,17 +4,13 @@ import {
   deleteDoc,
   doc,
   getDoc,
-  getDocs,
-  increment,
-  orderBy,
-  query,
+  onSnapshot,
   serverTimestamp,
-  setDoc,
-  updateDoc,
-  where,
+  Unsubscribe,
 } from "firebase/firestore";
 import { db } from "../firebase";
-import type { Idea, IdeaCategory, Comment } from "../types";
+import { ideaPath, ideasPath } from "./paths";
+import type { Idea, IdeaCategory } from "../types";
 import { logActivity } from "./activity";
 
 export async function createIdea(input: {
@@ -26,18 +22,15 @@ export async function createIdea(input: {
   createdBy: string;
   createdByName: string;
 }): Promise<string> {
-  const ref = await addDoc(collection(db, "ideas"), {
-    eventId: input.eventId,
-    title: input.title,
-    description: input.description,
+  const ref = await addDoc(collection(db, ideasPath(input.eventId)), {
+    title: input.title.trim(),
+    description: input.description.trim(),
     category: input.category,
     estimatedCost: input.estimatedCost,
     createdBy: input.createdBy,
     createdByName: input.createdByName,
     createdAt: serverTimestamp(),
-    upvotes: 0,
-    downvotes: 0,
-    score: 0,
+    voteCount: 0,
   });
 
   await logActivity({
@@ -51,111 +44,23 @@ export async function createIdea(input: {
   return ref.id;
 }
 
-export async function listIdeas(eventId: string): Promise<Idea[]> {
-  const q = query(collection(db, "ideas"), where("eventId", "==", eventId));
-  const snap = await getDocs(q);
-  return snap.docs
-    .map((d) => ({ id: d.id, ...(d.data() as Omit<Idea, "id">) }))
-    .sort((a, b) => b.score - a.score);
+export async function getIdea(eventId: string, ideaId: string): Promise<Idea | null> {
+  const snap = await getDoc(doc(db, ideaPath(eventId, ideaId)));
+  if (!snap.exists()) return null;
+  return { id: snap.id, ...(snap.data() as Omit<Idea, "id">) };
 }
 
-export async function deleteIdea(ideaId: string) {
-  await deleteDoc(doc(db, "ideas", ideaId));
-}
-
-export async function castVote(input: {
-  ideaId: string;
-  eventId: string;
-  userId: string;
-  userName: string;
-  value: 1 | -1;
-}) {
-  const voteId = `${input.ideaId}_${input.userId}`;
-  const voteRef = doc(db, "votes", voteId);
-  const ideaRef = doc(db, "ideas", input.ideaId);
-
-  const [voteSnap, ideaSnap] = await Promise.all([getDoc(voteRef), getDoc(ideaRef)]);
-  if (!ideaSnap.exists()) throw new Error("Idea not found");
-
-  const previous = voteSnap.exists() ? (voteSnap.data().value as 1 | -1) : 0;
-  if (previous === input.value) return;
-
-  let upDelta = 0;
-  let downDelta = 0;
-  if (previous === 1) upDelta -= 1;
-  if (previous === -1) downDelta -= 1;
-  if (input.value === 1) upDelta += 1;
-  if (input.value === -1) downDelta += 1;
-
-  await setDoc(voteRef, {
-    ideaId: input.ideaId,
-    eventId: input.eventId,
-    userId: input.userId,
-    value: input.value,
-    createdAt: serverTimestamp(),
-  });
-
-  await updateDoc(ideaRef, {
-    upvotes: increment(upDelta),
-    downvotes: increment(downDelta),
-    score: increment(upDelta - downDelta),
-  });
-
-  await logActivity({
-    eventId: input.eventId,
-    type: "idea_voted",
-    message: `${input.userName} voted on "${ideaSnap.data().title}"`,
-    userId: input.userId,
-    userName: input.userName,
+export function subscribeIdeas(
+  eventId: string,
+  cb: (ideas: Idea[]) => void
+): Unsubscribe {
+  return onSnapshot(collection(db, ideasPath(eventId)), (snap) => {
+    const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<Idea, "id">) }));
+    list.sort((a, b) => b.voteCount - a.voteCount);
+    cb(list);
   });
 }
 
-export async function getUserVote(ideaId: string, userId: string): Promise<1 | -1 | 0> {
-  const snap = await getDoc(doc(db, "votes", `${ideaId}_${userId}`));
-  return snap.exists() ? (snap.data().value as 1 | -1) : 0;
-}
-
-export async function listVotesForUser(eventId: string, userId: string): Promise<Record<string, 1 | -1>> {
-  const q = query(
-    collection(db, "votes"),
-    where("eventId", "==", eventId),
-    where("userId", "==", userId)
-  );
-  const snap = await getDocs(q);
-  const out: Record<string, 1 | -1> = {};
-  snap.docs.forEach((d) => {
-    const data = d.data();
-    out[data.ideaId] = data.value;
-  });
-  return out;
-}
-
-export async function addComment(input: {
-  eventId: string;
-  ideaId: string;
-  userId: string;
-  userName: string;
-  text: string;
-}) {
-  await addDoc(collection(db, "comments"), {
-    eventId: input.eventId,
-    ideaId: input.ideaId,
-    userId: input.userId,
-    userName: input.userName,
-    text: input.text,
-    createdAt: serverTimestamp(),
-  });
-  await logActivity({
-    eventId: input.eventId,
-    type: "comment_added",
-    message: `${input.userName} commented on an idea`,
-    userId: input.userId,
-    userName: input.userName,
-  });
-}
-
-export async function listComments(ideaId: string): Promise<Comment[]> {
-  const q = query(collection(db, "comments"), where("ideaId", "==", ideaId), orderBy("createdAt", "asc"));
-  const snap = await getDocs(q);
-  return snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<Comment, "id">) }));
+export async function deleteIdea(eventId: string, ideaId: string) {
+  await deleteDoc(doc(db, ideaPath(eventId, ideaId)));
 }

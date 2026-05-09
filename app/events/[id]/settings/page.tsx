@@ -6,12 +6,12 @@ import { doc, updateDoc } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/lib/auth";
 import { updateEvent } from "@/lib/firestore/events";
-import { useEvent, useIsOrganiser } from "../event-context";
+import type { Visibility } from "@/lib/types";
+import { useEvent } from "../event-context";
 
 export default function SettingsPage() {
-  const { event, refresh } = useEvent();
+  const { event, isOrganiser } = useEvent();
   const { profile, refreshProfile } = useAuth();
-  const isOrganiser = useIsOrganiser();
   const router = useRouter();
 
   const [title, setTitle] = useState(event.title);
@@ -19,6 +19,7 @@ export default function SettingsPage() {
   const [description, setDescription] = useState(event.description);
   const [startDate, setStartDate] = useState(toDateInput(event.startDate.toDate()));
   const [endDate, setEndDate] = useState(toDateInput(event.endDate.toDate()));
+  const [visibility, setVisibility] = useState<Visibility>(event.visibility);
   const [busy, setBusy] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
 
@@ -37,8 +38,8 @@ export default function SettingsPage() {
         description: description.trim(),
         startDate: new Date(startDate),
         endDate: new Date(endDate),
+        visibility,
       });
-      await refresh();
       setSavedAt(Date.now());
     } finally {
       setBusy(false);
@@ -61,6 +62,8 @@ export default function SettingsPage() {
       setProfileBusy(false);
     }
   };
+
+  const publicLink = typeof window !== "undefined" ? `${window.location.origin}/events/${event.id}` : "";
 
   return (
     <div className="space-y-6">
@@ -115,6 +118,25 @@ export default function SettingsPage() {
               <label className="label">Description</label>
               <textarea className="input min-h-[100px]" value={description} onChange={(e) => setDescription(e.target.value)} />
             </div>
+
+            <div>
+              <label className="label">Visibility</label>
+              <div className="grid grid-cols-2 gap-2">
+                <VisibilityOption
+                  active={visibility === "private"}
+                  onClick={() => setVisibility("private")}
+                  title="Private"
+                  body="Only members can see the event."
+                />
+                <VisibilityOption
+                  active={visibility === "public"}
+                  onClick={() => setVisibility("public")}
+                  title="Public"
+                  body="Anyone with the link can view (read-only)."
+                />
+              </div>
+            </div>
+
             <div className="flex items-center gap-3">
               <button type="submit" className="btn-primary" disabled={busy}>
                 {busy ? "Saving…" : "Save event"}
@@ -125,10 +147,54 @@ export default function SettingsPage() {
         </form>
       </section>
 
+      {event.visibility === "public" && (
+        <section>
+          <h2 className="font-semibold mb-2">Share link</h2>
+          <div className="card">
+            <div className="text-xs text-gray-500 mb-2">Anyone with this link can view the event.</div>
+            <div className="flex gap-2">
+              <input className="input font-mono text-xs" value={publicLink} readOnly onClick={(e) => (e.target as HTMLInputElement).select()} />
+              <button
+                type="button"
+                onClick={() => navigator.clipboard?.writeText(publicLink)}
+                className="btn-secondary"
+              >
+                Copy
+              </button>
+            </div>
+          </div>
+        </section>
+      )}
+
       <section>
         <button className="btn-secondary" onClick={() => router.push("/events")}>← Back to events</button>
       </section>
     </div>
+  );
+}
+
+function VisibilityOption({
+  active,
+  onClick,
+  title,
+  body,
+}: {
+  active: boolean;
+  onClick: () => void;
+  title: string;
+  body: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`text-left rounded-xl border p-3 transition ${
+        active ? "bg-brand-50 border-brand-300" : "bg-white border-gray-200 hover:border-gray-300"
+      }`}
+    >
+      <div className="font-semibold text-sm">{title}</div>
+      <div className="text-xs text-gray-600">{body}</div>
+    </button>
   );
 }
 

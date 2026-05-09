@@ -4,14 +4,14 @@ import {
   deleteDoc,
   doc,
   getDoc,
-  getDocs,
-  query,
+  onSnapshot,
   serverTimestamp,
   Timestamp,
+  Unsubscribe,
   updateDoc,
-  where,
 } from "firebase/firestore";
 import { db } from "../firebase";
+import { taskPath, tasksPath } from "./paths";
 import type { Task, TaskPriority, TaskStatus } from "../types";
 import { logActivity } from "./activity";
 
@@ -26,10 +26,9 @@ export async function createTask(input: {
   createdBy: string;
   createdByName: string;
 }): Promise<string> {
-  const ref = await addDoc(collection(db, "tasks"), {
-    eventId: input.eventId,
-    title: input.title,
-    description: input.description,
+  const ref = await addDoc(collection(db, tasksPath(input.eventId)), {
+    title: input.title.trim(),
+    description: input.description.trim(),
     status: "todo" as TaskStatus,
     priority: input.priority,
     dueDate: input.dueDate ? Timestamp.fromDate(input.dueDate) : null,
@@ -51,24 +50,28 @@ export async function createTask(input: {
   return ref.id;
 }
 
-export async function listTasks(eventId: string): Promise<Task[]> {
-  const q = query(collection(db, "tasks"), where("eventId", "==", eventId));
-  const snap = await getDocs(q);
-  return snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<Task, "id">) }));
+export function subscribeTasks(
+  eventId: string,
+  cb: (tasks: Task[]) => void
+): Unsubscribe {
+  return onSnapshot(collection(db, tasksPath(eventId)), (snap) => {
+    cb(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<Task, "id">) })));
+  });
 }
 
 export async function updateTaskStatus(
+  eventId: string,
   taskId: string,
   status: TaskStatus,
   actor: { id: string; name: string }
 ) {
-  const taskRef = doc(db, "tasks", taskId);
-  const snap = await getDoc(taskRef);
+  const ref = doc(db, taskPath(eventId, taskId));
+  const snap = await getDoc(ref);
   if (!snap.exists()) return;
   const task = snap.data() as Task;
-  await updateDoc(taskRef, { status });
+  await updateDoc(ref, { status });
   await logActivity({
-    eventId: task.eventId,
+    eventId,
     type: "task_status_changed",
     message: `${actor.name} moved "${task.title}" to ${status.replace("_", " ")}`,
     userId: actor.id,
@@ -77,6 +80,7 @@ export async function updateTaskStatus(
 }
 
 export async function updateTask(
+  eventId: string,
   taskId: string,
   patch: Partial<Pick<Task, "title" | "description" | "priority" | "assigneeId" | "assigneeName">> & {
     dueDate?: Date | null;
@@ -84,9 +88,9 @@ export async function updateTask(
 ) {
   const data: Record<string, unknown> = { ...patch };
   if (patch.dueDate !== undefined) data.dueDate = patch.dueDate ? Timestamp.fromDate(patch.dueDate) : null;
-  await updateDoc(doc(db, "tasks", taskId), data);
+  await updateDoc(doc(db, taskPath(eventId, taskId)), data);
 }
 
-export async function deleteTask(taskId: string) {
-  await deleteDoc(doc(db, "tasks", taskId));
+export async function deleteTask(eventId: string, taskId: string) {
+  await deleteDoc(doc(db, taskPath(eventId, taskId)));
 }
