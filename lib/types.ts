@@ -3,16 +3,36 @@ import { Timestamp } from "firebase/firestore";
 export type Role = "organiser" | "member";
 export type Visibility = "public" | "private";
 
-export type IdeaCategory =
-  | "activities"
+export type Workstream =
+  | "destinations"
   | "accommodation"
-  | "nightlife"
-  | "restaurants"
   | "travel"
-  | "general";
+  | "activities"
+  | "food_drink"
+  | "nightlife"
+  | "budget"
+  | "admin"
+  | "misc";
 
-export type TaskStatus = "todo" | "in_progress" | "done";
-export type TaskPriority = "low" | "medium" | "high";
+export type TaskStatus =
+  | "backlog"
+  | "todo"
+  | "in_progress"
+  | "blocked"
+  | "needs_decision"
+  | "done";
+
+export type ItemStatus =
+  | "suggested"
+  | "under_discussion"
+  | "shortlisted"
+  | "rejected"
+  | "chosen";
+
+export type DecisionStatus = "open" | "decided" | "closed";
+
+export type TaskPriority = "low" | "medium" | "high" | "critical";
+
 export type ProConType = "pro" | "con";
 
 export interface UserProfile {
@@ -55,24 +75,37 @@ export interface Destination {
   description: string;
   estimatedCost: number;
   travelNotes: string;
-  nightlifeRating: number; // 1–5
-  activityRating: number;  // 1–5
+  nightlifeRating: number;
+  activityRating: number;
+  status: ItemStatus;
+  labels: string[];
   createdBy: string;
   createdByName: string;
   createdAt: Timestamp;
   voteCount: number;
+  commentCount: number;
 }
 
 export interface Idea {
   id: string;
   title: string;
   description: string;
-  category: IdeaCategory;
+  workstream: Workstream;
   estimatedCost: number;
+  status: ItemStatus;
+  labels: string[];
   createdBy: string;
   createdByName: string;
   createdAt: Timestamp;
   voteCount: number;
+  commentCount: number;
+}
+
+export type BlockerKind = "task" | "decision";
+export interface Blocker {
+  kind: BlockerKind;
+  id: string;
+  title: string; // denormalised for quick render
 }
 
 export interface Task {
@@ -81,16 +114,64 @@ export interface Task {
   description: string;
   status: TaskStatus;
   priority: TaskPriority;
+  workstream: Workstream;
   dueDate: Timestamp | null;
   assigneeId: string | null;
   assigneeName: string | null;
+  labels: string[];
+  blocker: Blocker | null;
   createdBy: string;
   createdByName: string;
   createdAt: Timestamp;
+  updatedAt: Timestamp;
+  completedBy: string | null;
+  completedByName: string | null;
+  completedAt: Timestamp | null;
+  commentCount: number;
+  subtaskTotal: number;
+  subtaskCompleted: number;
+  /** users who want notifications on this task (notifications-ready, no UI yet). */
+  watcherIds: string[];
+}
+
+export interface Subtask {
+  id: string;
+  text: string;
+  completed: boolean;
+  createdBy: string;
+  createdAt: Timestamp;
+  completedBy: string | null;
+  completedAt: Timestamp | null;
+}
+
+export interface DecisionOption {
+  id: string;
+  text: string;
+  description: string;
+  createdBy: string;
+  createdByName: string;
+  createdAt: Timestamp;
+  voteCount: number;
+}
+
+export interface Decision {
+  id: string;
+  title: string;
+  description: string;
+  status: DecisionStatus;
+  dueDate: Timestamp | null;
+  createdBy: string;
+  createdByName: string;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+  chosenOptionId: string | null;
+  chosenOptionText: string | null;
+  optionCount: number;
+  commentCount: number;
 }
 
 export interface Vote {
-  id: string;            // doc id = userId
+  id: string;
   userId: string;
   userName: string;
   value: 1;
@@ -103,6 +184,8 @@ export interface Comment {
   userId: string;
   userName: string;
   createdAt: Timestamp;
+  /** for future @mention notifications. */
+  mentionedUserIds?: string[];
 }
 
 export interface ProConItem {
@@ -118,13 +201,26 @@ export type ActivityType =
   | "event_created"
   | "member_joined"
   | "destination_created"
+  | "destination_status_changed"
   | "idea_created"
+  | "idea_status_changed"
   | "vote_cast"
   | "vote_removed"
   | "comment_added"
   | "pro_con_added"
   | "task_created"
-  | "task_status_changed";
+  | "task_status_changed"
+  | "task_assignee_changed"
+  | "task_priority_changed"
+  | "task_due_date_changed"
+  | "task_completed"
+  | "task_reopened"
+  | "decision_created"
+  | "decision_option_added"
+  | "decision_chosen"
+  | "decision_status_changed"
+  | "subtask_added"
+  | "subtask_completed";
 
 export interface ActivityLogEntry {
   id: string;
@@ -133,25 +229,76 @@ export interface ActivityLogEntry {
   userId: string;
   userName: string;
   createdAt: Timestamp;
+  /** Optional pointer back to the affected entity for deep links. */
+  entityKind?: "task" | "idea" | "destination" | "decision";
+  entityId?: string;
 }
 
-export const IDEA_CATEGORIES: { value: IdeaCategory; label: string }[] = [
-  { value: "activities", label: "Activities" },
+// ---------------------------------------------------------------------------
+// Enum metadata. Keep ordering meaningful — it controls UI display order.
+// ---------------------------------------------------------------------------
+
+export const WORKSTREAMS: { value: Workstream; label: string }[] = [
+  { value: "destinations", label: "Destinations" },
   { value: "accommodation", label: "Accommodation" },
+  { value: "travel", label: "Flights / Travel" },
+  { value: "activities", label: "Activities" },
+  { value: "food_drink", label: "Food & Drink" },
   { value: "nightlife", label: "Nightlife" },
-  { value: "restaurants", label: "Restaurants" },
-  { value: "travel", label: "Travel" },
-  { value: "general", label: "General" },
+  { value: "budget", label: "Budget / Payments" },
+  { value: "admin", label: "Admin" },
+  { value: "misc", label: "Miscellaneous" },
 ];
 
-export const TASK_STATUSES: { value: TaskStatus; label: string }[] = [
-  { value: "todo", label: "To Do" },
-  { value: "in_progress", label: "In Progress" },
-  { value: "done", label: "Done" },
+export const TASK_STATUSES: { value: TaskStatus; label: string; tone: string }[] = [
+  { value: "backlog", label: "Backlog", tone: "bg-gray-100 text-gray-700" },
+  { value: "todo", label: "To Do", tone: "bg-blue-50 text-blue-700" },
+  { value: "in_progress", label: "In Progress", tone: "bg-indigo-50 text-indigo-700" },
+  { value: "blocked", label: "Blocked", tone: "bg-red-50 text-red-700" },
+  { value: "needs_decision", label: "Needs Decision", tone: "bg-amber-50 text-amber-700" },
+  { value: "done", label: "Done", tone: "bg-green-50 text-green-700" },
 ];
 
-export const TASK_PRIORITIES: { value: TaskPriority; label: string }[] = [
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High" },
+export const ITEM_STATUSES: { value: ItemStatus; label: string; tone: string }[] = [
+  { value: "suggested", label: "Suggested", tone: "bg-gray-100 text-gray-700" },
+  { value: "under_discussion", label: "Under Discussion", tone: "bg-blue-50 text-blue-700" },
+  { value: "shortlisted", label: "Shortlisted", tone: "bg-amber-50 text-amber-700" },
+  { value: "rejected", label: "Rejected", tone: "bg-gray-100 text-gray-500 line-through" },
+  { value: "chosen", label: "Chosen", tone: "bg-green-100 text-green-800" },
 ];
+
+export const DECISION_STATUSES: { value: DecisionStatus; label: string; tone: string }[] = [
+  { value: "open", label: "Open", tone: "bg-amber-50 text-amber-700" },
+  { value: "decided", label: "Decided", tone: "bg-green-50 text-green-700" },
+  { value: "closed", label: "Closed", tone: "bg-gray-100 text-gray-500" },
+];
+
+export const TASK_PRIORITIES: { value: TaskPriority; label: string; tone: string }[] = [
+  { value: "low", label: "Low", tone: "bg-gray-100 text-gray-600" },
+  { value: "medium", label: "Medium", tone: "bg-amber-50 text-amber-700" },
+  { value: "high", label: "High", tone: "bg-orange-50 text-orange-700" },
+  { value: "critical", label: "Critical", tone: "bg-red-100 text-red-700" },
+];
+
+export const PRESET_LABELS = [
+  "expensive",
+  "needs deposit",
+  "urgent",
+  "risky",
+  "easy win",
+  "group decision",
+  "booked",
+  "refundable",
+  "weather dependent",
+];
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+export function statusMeta<T extends { value: string; label: string; tone: string }>(
+  list: T[],
+  value: string
+): T | undefined {
+  return list.find((x) => x.value === value);
+}

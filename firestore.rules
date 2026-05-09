@@ -2,30 +2,27 @@ rules_version = '2';
 
 // Stag Planner Firestore security rules.
 //
-// Data model:
+// Tree:
 //   stagEvents/{eventId}
 //     /members/{memberId}
-//     /destinations/{destinationId}
-//       /votes/{userId}        ← doc id is userId, enforces one-vote-per-user
-//       /comments/{commentId}
-//       /prosCons/{itemId}
-//     /ideas/{ideaId}          ← same sub-tree as destinations
-//       /votes/{userId}
-//       /comments/{commentId}
-//       /prosCons/{itemId}
-//     /tasks/{taskId}
-//       /comments/{commentId}
-//     /activityLog/{entryId}
+//     /destinations/{id}/{votes,comments,prosCons}
+//     /ideas/{id}/{votes,comments,prosCons}
+//     /tasks/{id}/{comments,subtasks}
+//     /decisions/{id}/{comments,options/{id}/{votes,prosCons}}
+//     /activityLog/{id}
 //
 // Visibility:
-//   - private events: only members can read or write anything under the event
-//   - public events: anyone (including unauthenticated) can READ everything,
-//                    but only authenticated members can write
+//   private events → reads require membership
+//   public events  → reads open to anyone
+//   writes always require membership
 //
-// Voting:
-//   - Vote doc ids MUST equal the user's uid. Rules enforce this. Combined with
-//     "create if not exists" / "delete only your own", duplicate voting is
-//     structurally impossible.
+// Voting: vote doc id == userId. Two writes from the same user can't create
+// two docs.
+//
+// Counters: members may freely update parent docs (commentCount, voteCount,
+// optionCount, subtaskTotal, subtaskCompleted) — the app maintains them via
+// transactions. We don't try to enforce delta correctness in rules (that
+// would require complex resource.data math).
 
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -46,8 +43,6 @@ service cloud.firestore {
 
     // --- Users ----------------------------------------------------------------
     match /users/{uid} {
-      // Public-readable so member lookups by email work, and so public-event
-      // viewers can resolve names of voters/commenters.
       allow read: if true;
       allow create: if self(uid)
         && request.resource.data.keys().hasOnly(['email', 'name', 'avatarUrl', 'createdAt'])
@@ -66,16 +61,11 @@ service cloud.firestore {
       allow create: if signedIn()
         && request.resource.data.organiserId == request.auth.uid
         && request.resource.data.memberIds.hasAll([request.auth.uid])
-        && request.resource.data.memberIds.size() == 1
-        && (request.resource.data.visibility == "public"
-            || request.resource.data.visibility == "private");
+        && request.resource.data.memberIds.size() == 1;
 
-      // Two allowed update shapes:
-      //  1. Organiser editing event details (any field).
-      //  2. Authenticated user self-joining a public event — they may add
-      //     themselves to memberIds and change nothing else.
       allow update: if signedIn() && (
         resource.data.organiserId == request.auth.uid
+        // Self-join on a public event: only memberIds may change, by +1 with the caller.
         || (
           resource.data.visibility == "public"
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberIds'])
@@ -86,14 +76,12 @@ service cloud.firestore {
 
       allow delete: if signedIn() && resource.data.organiserId == request.auth.uid;
 
-      // --- Members ----------------------------------------------------------
+      // --- Members --------------------------------------------------------
       match /members/{memberId} {
         allow read: if canRead(eventId);
         allow create: if signedIn() && (
           isOrganiser(eventId)
-          // Self-join on public event
           || (request.resource.data.userId == request.auth.uid && isPublic(eventId))
-          // Initial creation by organiser of their own member doc when creating event
           || (request.resource.data.userId == request.auth.uid
               && eventDoc(eventId).organiserId == request.auth.uid)
         );
@@ -103,59 +91,13 @@ service cloud.firestore {
         );
       }
 
-      // --- Destinations -----------------------------------------------------
-      match /destinations/{destinationId} {
+      // --- Destinations ---------------------------------------------------
+      match /destinations/{id} {
         allow read: if canRead(eventId);
         allow create: if isMember(eventId)
           && request.resource.data.createdBy == request.auth.uid
-          && request.resource.data.voteCount == 0;
-        // Members may edit any destination metadata; voteCount may be
-        // updated by anyone whose vote toggles (the transaction is the
-        // only writer in practice — rule below permits the +/-1 delta).
-        allow update: if isMember(eventId);
-        allow delete: if isMember(eventId) && (
-          resource.data.createdBy == request.auth.uid || isOrganiser(eventId)
-        );
-
-        // --- Votes (presence-based) -------------------------------------
-        match /votes/{userId} {
-          allow read: if canRead(eventId);
-          allow create: if isMember(eventId)
-            && self(userId)
-            && request.resource.data.userId == request.auth.uid
-            && request.resource.data.value == 1;
-          allow update: if false;            // no edits — toggle = delete + recreate
-          allow delete: if isMember(eventId) && self(userId);
-        }
-
-        match /comments/{commentId} {
-          allow read: if canRead(eventId);
-          allow create: if isMember(eventId)
-            && request.resource.data.userId == request.auth.uid;
-          allow update: if false;
-          allow delete: if isMember(eventId) && (
-            resource.data.userId == request.auth.uid || isOrganiser(eventId)
-          );
-        }
-
-        match /prosCons/{itemId} {
-          allow read: if canRead(eventId);
-          allow create: if isMember(eventId)
-            && request.resource.data.userId == request.auth.uid
-            && (request.resource.data.type == "pro" || request.resource.data.type == "con");
-          allow update: if false;
-          allow delete: if isMember(eventId) && (
-            resource.data.userId == request.auth.uid || isOrganiser(eventId)
-          );
-        }
-      }
-
-      // --- Ideas ------------------------------------------------------------
-      match /ideas/{ideaId} {
-        allow read: if canRead(eventId);
-        allow create: if isMember(eventId)
-          && request.resource.data.createdBy == request.auth.uid
-          && request.resource.data.voteCount == 0;
+          && request.resource.data.voteCount == 0
+          && request.resource.data.commentCount == 0;
         allow update: if isMember(eventId);
         allow delete: if isMember(eventId) && (
           resource.data.createdBy == request.auth.uid || isOrganiser(eventId)
@@ -163,8 +105,7 @@ service cloud.firestore {
 
         match /votes/{userId} {
           allow read: if canRead(eventId);
-          allow create: if isMember(eventId)
-            && self(userId)
+          allow create: if isMember(eventId) && self(userId)
             && request.resource.data.userId == request.auth.uid
             && request.resource.data.value == 1;
           allow update: if false;
@@ -193,11 +134,57 @@ service cloud.firestore {
         }
       }
 
-      // --- Tasks ------------------------------------------------------------
-      match /tasks/{taskId} {
+      // --- Ideas ----------------------------------------------------------
+      match /ideas/{id} {
         allow read: if canRead(eventId);
         allow create: if isMember(eventId)
-          && request.resource.data.createdBy == request.auth.uid;
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.voteCount == 0
+          && request.resource.data.commentCount == 0;
+        allow update: if isMember(eventId);
+        allow delete: if isMember(eventId) && (
+          resource.data.createdBy == request.auth.uid || isOrganiser(eventId)
+        );
+
+        match /votes/{userId} {
+          allow read: if canRead(eventId);
+          allow create: if isMember(eventId) && self(userId)
+            && request.resource.data.userId == request.auth.uid
+            && request.resource.data.value == 1;
+          allow update: if false;
+          allow delete: if isMember(eventId) && self(userId);
+        }
+
+        match /comments/{commentId} {
+          allow read: if canRead(eventId);
+          allow create: if isMember(eventId)
+            && request.resource.data.userId == request.auth.uid;
+          allow update: if false;
+          allow delete: if isMember(eventId) && (
+            resource.data.userId == request.auth.uid || isOrganiser(eventId)
+          );
+        }
+
+        match /prosCons/{itemId} {
+          allow read: if canRead(eventId);
+          allow create: if isMember(eventId)
+            && request.resource.data.userId == request.auth.uid
+            && (request.resource.data.type == "pro" || request.resource.data.type == "con");
+          allow update: if false;
+          allow delete: if isMember(eventId) && (
+            resource.data.userId == request.auth.uid || isOrganiser(eventId)
+          );
+        }
+      }
+
+      // --- Tasks ----------------------------------------------------------
+      match /tasks/{id} {
+        allow read: if canRead(eventId);
+        allow create: if isMember(eventId)
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.commentCount == 0
+          && request.resource.data.subtaskTotal == 0
+          && request.resource.data.subtaskCompleted == 0;
         allow update: if isMember(eventId);
         allow delete: if isMember(eventId) && (
           resource.data.createdBy == request.auth.uid
@@ -214,9 +201,82 @@ service cloud.firestore {
             resource.data.userId == request.auth.uid || isOrganiser(eventId)
           );
         }
+
+        match /subtasks/{subtaskId} {
+          allow read: if canRead(eventId);
+          allow create: if isMember(eventId)
+            && request.resource.data.createdBy == request.auth.uid
+            && request.resource.data.completed == false;
+          allow update: if isMember(eventId);
+          allow delete: if isMember(eventId);
+        }
       }
 
-      // --- Activity log -----------------------------------------------------
+      // --- Decisions ------------------------------------------------------
+      match /decisions/{id} {
+        allow read: if canRead(eventId);
+        allow create: if isMember(eventId)
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.optionCount == 0
+          && request.resource.data.commentCount == 0
+          && request.resource.data.chosenOptionId == null;
+        // Only organiser can finalise the chosen option. Members may edit
+        // anything else (status, description, options).
+        allow update: if isMember(eventId) && (
+          isOrganiser(eventId)
+          || (
+            // Members can update fields *other than* chosenOptionId/Text.
+            !('chosenOptionId' in request.resource.data.diff(resource.data).affectedKeys())
+            && !('chosenOptionText' in request.resource.data.diff(resource.data).affectedKeys())
+          )
+        );
+        allow delete: if isMember(eventId) && (
+          resource.data.createdBy == request.auth.uid || isOrganiser(eventId)
+        );
+
+        match /comments/{commentId} {
+          allow read: if canRead(eventId);
+          allow create: if isMember(eventId)
+            && request.resource.data.userId == request.auth.uid;
+          allow update: if false;
+          allow delete: if isMember(eventId) && (
+            resource.data.userId == request.auth.uid || isOrganiser(eventId)
+          );
+        }
+
+        match /options/{optionId} {
+          allow read: if canRead(eventId);
+          allow create: if isMember(eventId)
+            && request.resource.data.createdBy == request.auth.uid
+            && request.resource.data.voteCount == 0;
+          allow update: if isMember(eventId);
+          allow delete: if isMember(eventId) && (
+            resource.data.createdBy == request.auth.uid || isOrganiser(eventId)
+          );
+
+          match /votes/{userId} {
+            allow read: if canRead(eventId);
+            allow create: if isMember(eventId) && self(userId)
+              && request.resource.data.userId == request.auth.uid
+              && request.resource.data.value == 1;
+            allow update: if false;
+            allow delete: if isMember(eventId) && self(userId);
+          }
+
+          match /prosCons/{itemId} {
+            allow read: if canRead(eventId);
+            allow create: if isMember(eventId)
+              && request.resource.data.userId == request.auth.uid
+              && (request.resource.data.type == "pro" || request.resource.data.type == "con");
+            allow update: if false;
+            allow delete: if isMember(eventId) && (
+              resource.data.userId == request.auth.uid || isOrganiser(eventId)
+            );
+          }
+        }
+      }
+
+      // --- Activity log ---------------------------------------------------
       match /activityLog/{entryId} {
         allow read: if canRead(eventId);
         allow create: if isMember(eventId)

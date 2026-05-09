@@ -11,7 +11,7 @@ import {
 } from "firebase/firestore";
 import { db } from "../firebase";
 import { destinationPath, destinationsPath } from "./paths";
-import type { Destination } from "../types";
+import type { Destination, ItemStatus } from "../types";
 import { logActivity } from "./activity";
 
 export async function createDestination(input: {
@@ -24,6 +24,7 @@ export async function createDestination(input: {
   travelNotes: string;
   nightlifeRating: number;
   activityRating: number;
+  labels: string[];
   createdBy: string;
   createdByName: string;
 }): Promise<string> {
@@ -36,18 +37,23 @@ export async function createDestination(input: {
     travelNotes: input.travelNotes.trim(),
     nightlifeRating: clampRating(input.nightlifeRating),
     activityRating: clampRating(input.activityRating),
+    status: "suggested" as ItemStatus,
+    labels: input.labels,
     createdBy: input.createdBy,
     createdByName: input.createdByName,
     createdAt: serverTimestamp(),
     voteCount: 0,
+    commentCount: 0,
   });
 
   await logActivity({
     eventId: input.eventId,
     type: "destination_created",
-    message: `${input.createdByName} suggested ${input.name}`,
+    message: `${input.createdByName} suggested ${input.name.trim()}`,
     userId: input.createdBy,
     userName: input.createdByName,
+    entityKind: "destination",
+    entityId: ref.id,
   });
 
   return ref.id;
@@ -83,14 +89,36 @@ export function subscribeDestination(
 export async function updateDestination(
   eventId: string,
   destinationId: string,
-  patch: Partial<Omit<Destination, "id" | "createdBy" | "createdByName" | "createdAt" | "voteCount">>
+  patch: Partial<Omit<Destination, "id" | "createdBy" | "createdByName" | "createdAt" | "voteCount" | "commentCount" | "status">>
 ) {
   const data: Record<string, unknown> = { ...patch };
-  if ("nightlifeRating" in patch && patch.nightlifeRating !== undefined)
-    data.nightlifeRating = clampRating(patch.nightlifeRating);
-  if ("activityRating" in patch && patch.activityRating !== undefined)
-    data.activityRating = clampRating(patch.activityRating);
+  if (patch.nightlifeRating !== undefined) data.nightlifeRating = clampRating(patch.nightlifeRating);
+  if (patch.activityRating !== undefined) data.activityRating = clampRating(patch.activityRating);
   await updateDoc(doc(db, destinationPath(eventId, destinationId)), data);
+}
+
+export async function setDestinationStatus(args: {
+  eventId: string;
+  destinationId: string;
+  status: ItemStatus;
+  actor: { id: string; name: string };
+}) {
+  const { eventId, destinationId, status, actor } = args;
+  const ref = doc(db, destinationPath(eventId, destinationId));
+  const snap = await getDoc(ref);
+  if (!snap.exists()) return;
+  const before = snap.data() as Destination;
+  if (before.status === status) return;
+  await updateDoc(ref, { status });
+  await logActivity({
+    eventId,
+    type: "destination_status_changed",
+    message: `${actor.name} moved "${before.name}" to ${status.replace("_", " ")}`,
+    userId: actor.id,
+    userName: actor.name,
+    entityKind: "destination",
+    entityId: destinationId,
+  });
 }
 
 export async function deleteDestination(eventId: string, destinationId: string) {

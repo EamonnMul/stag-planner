@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
+import { LabelEditor } from "@/components/LabelChips";
 import { useAuth } from "@/lib/auth";
 import { createDestination } from "@/lib/firestore/destinations";
 import { useEvent } from "../../event-context";
@@ -19,6 +20,7 @@ export default function NewDestinationPage() {
   const [travelNotes, setTravelNotes] = useState("");
   const [nightlife, setNightlife] = useState(3);
   const [activity, setActivity] = useState(3);
+  const [labels, setLabels] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -42,6 +44,7 @@ export default function NewDestinationPage() {
         travelNotes,
         nightlifeRating: nightlife,
         activityRating: activity,
+        labels,
         createdBy: user.uid,
         createdByName: profile.name,
       });
@@ -92,6 +95,10 @@ export default function NewDestinationPage() {
         <div className="grid grid-cols-2 gap-3">
           <RatingPicker label="Nightlife rating" value={nightlife} onChange={setNightlife} />
           <RatingPicker label="Activity rating" value={activity} onChange={setActivity} />
+        </div>
+        <div>
+          <label className="label">Labels</label>
+          <LabelEditor value={labels} onChange={setLabels} />
         </div>
 
         {error && <p className="text-sm text-red-600">{error}</p>}
