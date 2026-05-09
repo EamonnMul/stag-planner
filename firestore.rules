@@ -1,0 +1,147 @@
+rules_version = '2';
+
+// Stag Planner Firestore security rules.
+//
+// Auth model:
+//   - Users self-create their /users/{uid} doc on signup.
+//   - Stag events have a memberIds[] array; only listed users can read.
+//   - The organiser (organiserId) controls event details and membership.
+//
+// Helpers below avoid duplicating event lookups across rules.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function self(uid) {
+      return request.auth.uid == uid;
+    }
+
+    function eventDoc(eventId) {
+      return get(/databases/$(database)/documents/stagEvents/$(eventId)).data;
+    }
+
+    function isMember(eventId) {
+      return signedIn() && request.auth.uid in eventDoc(eventId).memberIds;
+    }
+
+    function isOrganiser(eventId) {
+      return signedIn() && eventDoc(eventId).organiserId == request.auth.uid;
+    }
+
+    // Users: anyone signed in may read user profiles (used for name/email lookups
+    // when adding members). Each user can only write their own profile.
+    match /users/{uid} {
+      allow read: if signedIn();
+      allow create: if self(uid)
+        && request.resource.data.keys().hasOnly(['email', 'name', 'avatarUrl', 'createdAt'])
+        && request.resource.data.email is string
+        && request.resource.data.name is string;
+      allow update: if self(uid)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'avatarUrl']);
+      allow delete: if false;
+    }
+
+    // Stag events: members read; organiser updates; any signed-in user can create
+    // an event (they become the organiser and only member at creation time).
+    match /stagEvents/{eventId} {
+      allow read: if signedIn() && request.auth.uid in resource.data.memberIds;
+      allow create: if signedIn()
+        && request.resource.data.organiserId == request.auth.uid
+        && request.resource.data.memberIds.hasAll([request.auth.uid])
+        && request.resource.data.memberIds.size() == 1;
+      allow update: if signedIn() && (
+        // Organiser may edit any allowed fields, including memberIds (for invites/removals).
+        resource.data.organiserId == request.auth.uid
+        // Members may NOT modify event docs themselves.
+      );
+      allow delete: if signedIn() && resource.data.organiserId == request.auth.uid;
+    }
+
+    // Members: any event member can read membership; organiser manages it.
+    match /members/{memberId} {
+      allow read: if signedIn() && isMember(resource.data.eventId);
+      allow create: if signedIn()
+        && (
+          // Organiser can add anyone to their event
+          isOrganiser(request.resource.data.eventId)
+          // Or self-creation when first creating an event (organiser themself)
+          || (request.resource.data.userId == request.auth.uid
+              && eventDoc(request.resource.data.eventId).organiserId == request.auth.uid)
+        );
+      allow update: if signedIn() && isOrganiser(resource.data.eventId);
+      allow delete: if signedIn() && isOrganiser(resource.data.eventId);
+    }
+
+    // Ideas: members read/create; author or organiser may delete.
+    match /ideas/{ideaId} {
+      allow read: if signedIn() && isMember(resource.data.eventId);
+      allow create: if signedIn()
+        && isMember(request.resource.data.eventId)
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.upvotes == 0
+        && request.resource.data.downvotes == 0
+        && request.resource.data.score == 0;
+      // Anyone in the event can update vote counters; only author/organiser can edit content.
+      allow update: if signedIn() && isMember(resource.data.eventId);
+      allow delete: if signedIn() && (
+        resource.data.createdBy == request.auth.uid
+        || isOrganiser(resource.data.eventId)
+      );
+    }
+
+    // Votes: doc id is `${ideaId}_${userId}` to enforce one-vote-per-user-per-idea.
+    match /votes/{voteId} {
+      allow read: if signedIn() && isMember(resource.data.eventId);
+      allow create: if signedIn()
+        && voteId == request.resource.data.ideaId + '_' + request.auth.uid
+        && request.resource.data.userId == request.auth.uid
+        && isMember(request.resource.data.eventId)
+        && (request.resource.data.value == 1 || request.resource.data.value == -1);
+      allow update: if signedIn()
+        && resource.data.userId == request.auth.uid
+        && (request.resource.data.value == 1 || request.resource.data.value == -1);
+      allow delete: if signedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    // Comments: any member may read/post; author may delete their own.
+    match /comments/{commentId} {
+      allow read: if signedIn() && isMember(resource.data.eventId);
+      allow create: if signedIn()
+        && isMember(request.resource.data.eventId)
+        && request.resource.data.userId == request.auth.uid;
+      allow update: if false;
+      allow delete: if signedIn() && (
+        resource.data.userId == request.auth.uid
+        || isOrganiser(resource.data.eventId)
+      );
+    }
+
+    // Tasks: any member may read; create/update is open to members
+    // (the app limits edit affordances to assignee/creator/organiser).
+    match /tasks/{taskId} {
+      allow read: if signedIn() && isMember(resource.data.eventId);
+      allow create: if signedIn()
+        && isMember(request.resource.data.eventId)
+        && request.resource.data.createdBy == request.auth.uid;
+      allow update: if signedIn() && isMember(resource.data.eventId);
+      allow delete: if signedIn() && (
+        resource.data.createdBy == request.auth.uid
+        || resource.data.assigneeId == request.auth.uid
+        || isOrganiser(resource.data.eventId)
+      );
+    }
+
+    // Activity log: members read; system or members append on action.
+    match /activityLog/{entryId} {
+      allow read: if signedIn() && isMember(resource.data.eventId);
+      allow create: if signedIn()
+        && isMember(request.resource.data.eventId)
+        && request.resource.data.userId == request.auth.uid;
+      allow update: if false;
+      allow delete: if signedIn() && isOrganiser(resource.data.eventId);
+    }
+  }
+}
