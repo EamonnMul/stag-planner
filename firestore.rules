@@ -285,5 +285,12 @@ service cloud.firestore {
         allow delete: if signedIn() && isOrganiser(eventId);
       }
     }
+
+    // --- Global admin activity log -------------------------------------------
+    // Only the Admin SDK (server) writes here; clients are never permitted
+    // read or write access. Bypassing rules requires service-account creds.
+    match /adminActivityLog/{entryId} {
+      allow read, write: if false;
+    }
   }
 }

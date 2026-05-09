@@ -25,6 +25,7 @@ interface AuthContextValue {
   user: User | null;
   profile: UserProfile | null;
   loading: boolean;
+  isAdmin: boolean;
   signUp: (email: string, password: string, name: string) => Promise<void>;
   logIn: (email: string, password: string) => Promise<void>;
   logInWithGoogle: () => Promise<void>;
@@ -38,6 +39,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   const loadProfile = async (u: User) => {
     const snap = await getDoc(doc(db, "users", u.uid));
@@ -45,11 +47,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     else setProfile(null);
   };
 
+  // Reads the admin custom claim from the ID token. UX hint only — the
+  // server still verifies admin on every /api/admin/* request.
+  const refreshAdminClaim = async (u: User | null) => {
+    if (!u) return setIsAdmin(false);
+    try {
+      const t = await u.getIdTokenResult();
+      setIsAdmin(t.claims.admin === true);
+    } catch {
+      setIsAdmin(false);
+    }
+  };
+
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (u) => {
       setUser(u);
-      if (u) await loadProfile(u);
-      else setProfile(null);
+      if (u) {
+        await loadProfile(u);
+        await refreshAdminClaim(u);
+      } else {
+        setProfile(null);
+        setIsAdmin(false);
+      }
       setLoading(false);
     });
     return () => unsub();
@@ -96,7 +115,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, profile, loading, signUp, logIn, logInWithGoogle, logOut, refreshProfile }}>
+    <AuthContext.Provider value={{ user, profile, loading, isAdmin, signUp, logIn, logInWithGoogle, logOut, refreshProfile }}>
       {children}
     </AuthContext.Provider>
   );

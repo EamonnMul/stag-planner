@@ -7,7 +7,7 @@ import { useAuth } from "@/lib/auth";
 import { Avatar } from "./ui/Avatar";
 
 export function TopBar({ title }: { title?: string }) {
-  const { profile, logOut } = useAuth();
+  const { profile, isAdmin, logOut } = useAuth();
   const router = useRouter();
   const [open, setOpen] = useState(false);
 
@@ -34,6 +34,11 @@ export function TopBar({ title }: { title?: string }) {
               <Link href="/events" className="block px-3 py-2 text-sm hover:bg-gray-50" onClick={() => setOpen(false)}>
                 My events
               </Link>
+              {isAdmin && (
+                <Link href="/admin" className="block px-3 py-2 text-sm hover:bg-gray-50 text-red-700 font-semibold" onClick={() => setOpen(false)}>
+                  Admin
+                </Link>
+              )}
               <button onClick={handleLogout} className="block w-full text-left px-3 py-2 text-sm hover:bg-gray-50">
                 Log out
               </button>
